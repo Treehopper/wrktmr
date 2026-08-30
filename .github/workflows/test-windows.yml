@@ -1,0 +1,57 @@
+name: Test PowerShell scripts (Windows)
+
+on:
+  push:
+    paths:
+      - '**.ps1'
+  pull_request:
+    paths:
+      - '**.ps1'
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Lint with PSScriptAnalyzer
+        shell: powershell
+        run: |
+          Install-Module -Name PSScriptAnalyzer -Force -Scope CurrentUser -ErrorAction Stop
+          $results = Invoke-ScriptAnalyzer -Path . -Recurse -Severity Error,Warning
+          if ($results) {
+            $results | Format-Table -AutoSize | Out-String | Write-Host
+          }
+          $errors = $results | Where-Object { $_.Severity -eq 'Error' }
+          if ($errors) {
+            throw "PSScriptAnalyzer found $($errors.Count) error(s)."
+          }
+
+      - name: Smoke test TimeTracker.ps1
+        shell: powershell
+        run: |
+          $proc = Start-Process powershell.exe -ArgumentList '-Sta','-NoLogo','-NoProfile','-ExecutionPolicy','Bypass','-File','TimeTracker.ps1' -PassThru
+          Start-Sleep -Seconds 20
+
+          if ($proc.HasExited) {
+            Write-Error "TimeTracker.ps1 exited early (exit code $($proc.ExitCode)) - it should still be running after 20s."
+            exit 1
+          }
+          Stop-Process -Id $proc.Id -Force
+
+          $errorLog = Join-Path $env:LOCALAPPDATA 'wrktmr\error.log'
+          if (Test-Path $errorLog) {
+            Write-Error "error.log was created during the run:"
+            Get-Content $errorLog | Write-Host
+            exit 1
+          }
+
+          $stateFile = Join-Path $env:LOCALAPPDATA 'wrktmr\state.json'
+          if (-not (Test-Path $stateFile)) {
+            Write-Error "state.json was never created - TimeTracker.ps1 may not have started correctly."
+            exit 1
+          }
+
+          Write-Host "Smoke test passed: started, ran 20s, persisted state, no errors logged."
