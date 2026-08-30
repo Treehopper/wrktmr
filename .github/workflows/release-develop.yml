@@ -1,0 +1,38 @@
+name: Release wrktmr scripts
+
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version
+        id: version
+        run: echo "tag=v0.${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Package PowerShell scripts
+        run: |
+          if ! command -v 7z >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y p7zip-full
+          fi
+          7z a "wrktmr-${{ steps.version.outputs.tag }}.7z" \
+            TimeTracker.ps1 Install-Startup.ps1 Uninstall-Startup.ps1
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.version.outputs.tag }}" \
+            "wrktmr-${{ steps.version.outputs.tag }}.7z" \
+            --title "wrktmr ${{ steps.version.outputs.tag }}" \
+            --notes "Automated build from develop @ ${{ github.sha }}" \
+            --target "${{ github.sha }}"
