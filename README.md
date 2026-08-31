@@ -12,6 +12,9 @@ work limit. Pure PowerShell, no admin rights required.
 - **Manual pause/resume** from the tray icon's right-click menu, e.g. for a
   lunch break while still logged in - this stays paused across lock/unlock
   until you resume it yourself.
+- **Manual "Add time..."** from the tray icon's right-click menu lets you add
+  (or subtract, with a negative number) minutes worked offline - handy for
+  work done away from the tracked machine.
 - **Stops** naturally at logout/shutdown (Windows kills the process); state is
   saved continuously (every 15s) and on logoff, so nothing is lost.
 - **Starts** automatically at your next login if you've installed the startup
