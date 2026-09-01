@@ -66,8 +66,21 @@ function Count-Workdays([datetime]$from, [datetime]$toExclusive) {
     return $count
 }
 
+function Format-Hours([double]$seconds) {
+    $totalMinutes = [math]::Round($seconds / 60)
+    $h = [math]::Floor($totalMinutes / 60)
+    $m = $totalMinutes % 60
+    if ($m -eq 0) { return "{0}h" -f $h }
+    return "{0}h {1}m" -f $h, $m
+}
+
 function Format-SignedHours([double]$seconds) {
-    return ("{0:+0.00;-0.00;0.00}h" -f ($seconds / 3600))
+    $sign = if ($seconds -gt 0) { "+" } elseif ($seconds -lt 0) { "-" } else { "" }
+    $totalMinutes = [math]::Round([math]::Abs($seconds) / 60)
+    $h = [math]::Floor($totalMinutes / 60)
+    $m = $totalMinutes % 60
+    if ($m -eq 0) { return "{0}{1}h" -f $sign, $h }
+    return "{0}{1}h {2}m" -f $sign, $h, $m
 }
 
 function Get-DailyStats {
@@ -208,10 +221,10 @@ function Update-TrayIcon([string]$mode) {
 
 function Update-TrayText {
     $stats      = Get-DailyStats
-    $todayHours = [math]::Round($script:state.todaySeconds / 3600, 2)
+    $todayStr   = Format-Hours $script:state.todaySeconds
     $devStr     = Format-SignedHours $stats.WeeklyDeviationSeconds
     $endStr     = $stats.ProjectedEnd.ToString("HH:mm")
-    $text = "{0}h today, dev {1}, end {2}" -f $todayHours, $devStr, $endStr
+    $text = "{0} today, dev {1}, end {2}" -f $todayStr, $devStr, $endStr
     if ($text.Length -gt 63) { $text = $text.Substring(0, 60) + "..." }
     $notifyIcon.Text = $text
     $pauseItem.Text = if ($script:state.manualPause) { "Resume" } else { "Pause" }
@@ -219,13 +232,13 @@ function Update-TrayText {
 }
 
 function Write-StatusFile {
-    $stats          = Get-DailyStats
-    $weekHours      = [math]::Round($script:state.weeklySeconds / 3600, 2)
-    $todayHours     = [math]::Round($script:state.todaySeconds / 3600, 2)
-    $todayPlanHours = [math]::Round($stats.TodayPlanSeconds / 3600, 2)
-    $leftStr        = Format-SignedHours $stats.TimeLeftTodaySeconds
-    $devStr         = Format-SignedHours $stats.WeeklyDeviationSeconds
-    $carryStr       = Format-SignedHours $stats.CarryOverSeconds
+    $stats         = Get-DailyStats
+    $weekStr       = Format-Hours $script:state.weeklySeconds
+    $todayStr      = Format-Hours $script:state.todaySeconds
+    $todayPlanStr  = Format-Hours $stats.TodayPlanSeconds
+    $leftStr       = Format-SignedHours $stats.TimeLeftTodaySeconds
+    $devStr        = Format-SignedHours $stats.WeeklyDeviationSeconds
+    $carryStr      = Format-SignedHours $stats.CarryOverSeconds
     $mode = switch (Get-TrackingMode) {
         "Paused" { "Paused (manual)" }
         default  { $_ }
@@ -234,12 +247,12 @@ function Write-StatusFile {
     @"
 wrktmr status - $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Status: $mode
-Today: $todayHours h (plan: $todayPlanHours h)
+Today: $todayStr (plan: $todayPlanStr)
 Carry-over from previous days: $carryStr
 Time left today: $leftStr
 Projected end time today$($breakNote): $($stats.ProjectedEnd.ToString("HH:mm"))
 Deviation from plan (this week): $devStr
-This week (since $($script:state.weekStart)): $weekHours h
+This week (since $($script:state.weekStart)): $weekStr
 "@ | Out-File -FilePath $statusFile -Encoding utf8
 }
 
@@ -336,8 +349,8 @@ $timer.add_Tick({
 
         if (-not $script:state.notified90 -and $pctFraction -ge 0.9) {
             $script:state.notified90 = $true
-            $weekHoursSoFar = [math]::Round($script:state.weeklySeconds / 3600, 2)
-            Show-Balloon "wrktmr" ("Nearing weekly limit: {0}h logged of {1}h budget." -f $weekHoursSoFar, $WeeklyLimitHours) ([System.Windows.Forms.ToolTipIcon]::Warning)
+            $weekStrSoFar = Format-Hours $script:state.weeklySeconds
+            Show-Balloon "wrktmr" ("Nearing weekly limit: {0} logged of {1}h budget." -f $weekStrSoFar, $WeeklyLimitHours) ([System.Windows.Forms.ToolTipIcon]::Warning)
         }
         if (-not $script:state.notified100 -and $pctFraction -ge 1.0) {
             $script:state.notified100 = $true
