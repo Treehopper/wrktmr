@@ -38,13 +38,65 @@ if (-not (Test-Path $historyCsv)) {
 
 # --- Config ---
 $WeeklyLimitHours   = 39
+$WorkDaysPerWeek    = 5
 $WeeklyLimitSeconds = $WeeklyLimitHours * 3600
+$DailyPlanSeconds   = $WeeklyLimitSeconds / $WorkDaysPerWeek
+$BreakSeconds       = 3600
 $TickIntervalMs     = 15000
 
 function Get-WeekStart([datetime]$date) {
     # Monday-based week start.
     $offset = ([int]$date.DayOfWeek + 6) % 7
     return $date.Date.AddDays(-$offset)
+}
+
+function Test-IsWorkday([datetime]$date) {
+    return $date.DayOfWeek -ne [System.DayOfWeek]::Saturday -and $date.DayOfWeek -ne [System.DayOfWeek]::Sunday
+}
+
+function Count-Workdays([datetime]$from, [datetime]$toExclusive) {
+    # Number of workdays in [from.Date, toExclusive.Date).
+    $count = 0
+    $d = $from.Date
+    while ($d -lt $toExclusive.Date) {
+        if (Test-IsWorkday $d) { $count++ }
+        $d = $d.AddDays(1)
+    }
+    return $count
+}
+
+function Format-SignedHours([double]$seconds) {
+    return ("{0:+0.00;-0.00;0.00}h" -f ($seconds / 3600))
+}
+
+function Get-DailyStats {
+    # Deviation-based view of progress: an equal daily plan across the week's
+    # workdays, with any over/under-logging on earlier days carried over onto
+    # today's target (and, transitively, the rest of the week).
+    $now = Get-Date
+    $weekStartDate = [datetime]::ParseExact($script:state.weekStart, "yyyy-MM-dd", $null)
+
+    $workdaysBeforeToday  = Count-Workdays $weekStartDate $now
+    $todayIsWorkday       = Test-IsWorkday $now
+    $workdaysThroughToday = $workdaysBeforeToday + $(if ($todayIsWorkday) { 1 } else { 0 })
+
+    $plannedBeforeToday = $workdaysBeforeToday * $DailyPlanSeconds
+    $actualBeforeToday  = $script:state.weeklySeconds - $script:state.todaySeconds
+    $carryOverSeconds   = $actualBeforeToday - $plannedBeforeToday
+
+    $todayPlanSeconds     = if ($todayIsWorkday) { $DailyPlanSeconds } else { 0 }
+    $timeLeftTodaySeconds = $todayPlanSeconds - $script:state.todaySeconds - $carryOverSeconds
+
+    $weeklyDeviationSeconds = $script:state.weeklySeconds - ($workdaysThroughToday * $DailyPlanSeconds)
+
+    return [ordered]@{
+        TodayPlanSeconds       = $todayPlanSeconds
+        TimeLeftTodaySeconds   = $timeLeftTodaySeconds
+        CarryOverSeconds       = $carryOverSeconds
+        WeeklyDeviationSeconds = $weeklyDeviationSeconds
+        ProjectedEnd           = $now.AddSeconds($timeLeftTodaySeconds + $BreakSeconds)
+        TodayIsWorkday         = $todayIsWorkday
+    }
 }
 
 # --- Persisted state ---
@@ -125,27 +177,35 @@ $exitItem   = $menu.Items.Add("Exit")
 $notifyIcon.ContextMenuStrip = $menu
 
 function Update-TrayText {
-    $weekHours  = [math]::Round($script:state.weeklySeconds / 3600, 2)
+    $stats      = Get-DailyStats
     $todayHours = [math]::Round($script:state.todaySeconds / 3600, 2)
-    $pct  = [math]::Round(($script:state.weeklySeconds / $WeeklyLimitSeconds) * 100)
+    $leftStr    = Format-SignedHours $stats.TimeLeftTodaySeconds
+    $devStr     = Format-SignedHours $stats.WeeklyDeviationSeconds
     $mode = if ($script:isLocked) { "locked" } elseif ($script:state.manualPause) { "paused" } else { "tracking" }
-    $text = "wrktmr: {0}h today / {1}h wk ({2}%) [{3}]" -f $todayHours, $weekHours, $pct, $mode
+    $text = "wrktmr: {0}h today, {1} left, dev {2} [{3}]" -f $todayHours, $leftStr, $devStr, $mode
     if ($text.Length -gt 63) { $text = $text.Substring(0, 60) + "..." }
     $notifyIcon.Text = $text
     $pauseItem.Text = if ($script:state.manualPause) { "Resume" } else { "Pause" }
 }
 
 function Write-StatusFile {
-    $weekHours  = [math]::Round($script:state.weeklySeconds / 3600, 2)
-    $todayHours = [math]::Round($script:state.todaySeconds / 3600, 2)
-    $remaining  = [math]::Round($WeeklyLimitHours - $weekHours, 2)
+    $stats          = Get-DailyStats
+    $weekHours      = [math]::Round($script:state.weeklySeconds / 3600, 2)
+    $todayHours     = [math]::Round($script:state.todaySeconds / 3600, 2)
+    $todayPlanHours = [math]::Round($stats.TodayPlanSeconds / 3600, 2)
+    $leftStr        = Format-SignedHours $stats.TimeLeftTodaySeconds
+    $devStr         = Format-SignedHours $stats.WeeklyDeviationSeconds
+    $carryStr       = Format-SignedHours $stats.CarryOverSeconds
     $mode = if ($script:isLocked) { "Locked" } elseif ($script:state.manualPause) { "Paused (manual)" } else { "Tracking" }
     @"
 wrktmr status - $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Status: $mode
-Today: $todayHours h
-This week (since $($script:state.weekStart)): $weekHours h / $WeeklyLimitHours h
-Remaining this week: $remaining h
+Today: $todayHours h (plan: $todayPlanHours h)
+Carry-over from previous days: $carryStr
+Time left today: $leftStr
+Projected end time today (incl. 1h break): $($stats.ProjectedEnd.ToString("HH:mm"))
+Deviation from plan (this week): $devStr
+This week (since $($script:state.weekStart)): $weekHours h
 "@ | Out-File -FilePath $statusFile -Encoding utf8
 }
 
@@ -242,7 +302,8 @@ $timer.add_Tick({
 
         if (-not $script:state.notified90 -and $pctFraction -ge 0.9) {
             $script:state.notified90 = $true
-            Show-Balloon "wrktmr" ("90% of your weekly {0}h limit reached." -f $WeeklyLimitHours) ([System.Windows.Forms.ToolTipIcon]::Warning)
+            $weekHoursSoFar = [math]::Round($script:state.weeklySeconds / 3600, 2)
+            Show-Balloon "wrktmr" ("Nearing weekly limit: {0}h logged of {1}h budget." -f $weekHoursSoFar, $WeeklyLimitHours) ([System.Windows.Forms.ToolTipIcon]::Warning)
         }
         if (-not $script:state.notified100 -and $pctFraction -ge 1.0) {
             $script:state.notified100 = $true

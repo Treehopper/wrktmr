@@ -21,12 +21,28 @@ work limit. Pure PowerShell, no admin rights required.
   shortcut (see below).
 - The week resets **Monday 00:00**.
 
+## Deviations, not percentages
+
+Instead of a weekly percentage, wrktmr works off an equal daily plan
+(the weekly limit split evenly across your workdays, Monday-Friday) and
+shows how far off that plan you are:
+
+- **Time left today** - what's left to log today to hit plan, adjusted by
+  carry-over from earlier days this week (log too little on Monday and
+  Tuesday's target grows; log too much and it shrinks).
+- **Deviation** - your running total ahead of or behind plan for the week
+  so far.
+- **Projected end time** - today's likely finish time, based on the time
+  still left to log plus a 1-hour break.
+
+The tray icon's tooltip always shows today's hours, time left, and
+deviation. Right-click > "Show status" opens a live status file with the
+full detail, including the projected end time.
+
 ## Notifications
 
-- A toast/balloon at **90%** and **100%** of the 39h weekly limit, then one
-  more for each additional hour of overtime.
-- The tray icon's tooltip always shows today's and this week's hours.
-- Right-click > "Show status" opens a live status file with the full detail.
+- A toast/balloon when nearing (90%) and at (100%) the 39h weekly limit,
+  then one more for each additional hour of overtime.
 
 ## Files
 
@@ -57,4 +73,7 @@ To remove the auto-start shortcut later, run `Uninstall-Startup.ps1`.
 
 ## Changing the weekly limit
 
-Edit `$WeeklyLimitHours = 39` near the top of `TimeTracker.ps1`.
+Edit `$WeeklyLimitHours = 39` near the top of `TimeTracker.ps1`. The daily
+plan is this limit split across `$WorkDaysPerWeek` (default 5); the
+assumed break used for the projected end time is `$BreakSeconds` (default
+1 hour) - both are configurable in the same place.
