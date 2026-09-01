@@ -13,6 +13,7 @@ wrktmr - a lightweight system-tray time tracker for staying within a
 
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName Microsoft.VisualBasic
 
 # --- Single instance guard ---
 $mutexName = "Local\WrkTmr-SingleInstance"
@@ -116,8 +117,9 @@ $notifyIcon.Visible = $true
 $notifyIcon.Text = "wrktmr"
 
 $menu = New-Object System.Windows.Forms.ContextMenuStrip
-$pauseItem  = $menu.Items.Add("Pause")
-$statusItem = $menu.Items.Add("Show status")
+$pauseItem    = $menu.Items.Add("Pause")
+$addTimeItem  = $menu.Items.Add("Add time...")
+$statusItem   = $menu.Items.Add("Show status")
 $menu.Items.Add("-") | Out-Null
 $exitItem   = $menu.Items.Add("Exit")
 $notifyIcon.ContextMenuStrip = $menu
@@ -163,6 +165,31 @@ $pauseItem.add_Click({
     } else {
         Show-Balloon "wrktmr" "Tracking resumed."
     }
+})
+
+$addTimeItem.add_Click({
+    $input = [Microsoft.VisualBasic.Interaction]::InputBox(
+        "Minutes to add (use a negative number to subtract):",
+        "wrktmr - Add time",
+        "0")
+    if ([string]::IsNullOrWhiteSpace($input)) { return }
+
+    $minutes = 0.0
+    if (-not [double]::TryParse($input, [ref]$minutes)) {
+        Show-Balloon "wrktmr" "Not a valid number of minutes." ([System.Windows.Forms.ToolTipIcon]::Error)
+        return
+    }
+    if ($minutes -eq 0) { return }
+
+    $seconds = $minutes * 60
+    $script:state.todaySeconds  = [math]::Max(0, $script:state.todaySeconds + $seconds)
+    $script:state.weeklySeconds = [math]::Max(0, $script:state.weeklySeconds + $seconds)
+
+    Update-TrayText
+    Write-StatusFile
+    Save-State
+
+    Show-Balloon "wrktmr" ("{0:+0.##;-0.##} minutes added." -f $minutes)
 })
 
 $statusItem.add_Click({
@@ -240,6 +267,7 @@ $timer.Start()
 
 Update-TrayText
 Write-StatusFile
+Save-State
 
 [System.Windows.Forms.Application]::Run()
 
