@@ -267,6 +267,7 @@ $timer.Start()
 
 Update-TrayText
 Write-StatusFile
+Save-State
 
 [System.Windows.Forms.Application]::Run()
 
