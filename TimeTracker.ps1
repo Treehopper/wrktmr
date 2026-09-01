@@ -286,7 +286,7 @@ function Get-WeeklyOverview {
         } else {
             $hoursStr = "-"
         }
-        $lines += "  {0,-16}{1}" -f $label, $hoursStr
+        $lines += "  {0,-18}{1}" -f $label, $hoursStr
     }
     return $lines -join "`n"
 }
