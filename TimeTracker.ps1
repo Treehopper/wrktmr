@@ -165,6 +165,12 @@ function Test-IsTracking {
     return (-not $script:state.manualPause) -and (-not $script:isLocked)
 }
 
+function Get-TrackingMode {
+    if ($script:isLocked) { return "Locked" }
+    if ($script:state.manualPause) { return "Paused" }
+    return "Tracking"
+}
+
 Load-State
 Roll-DayAndWeek
 
@@ -182,6 +188,24 @@ $menu.Items.Add("-") | Out-Null
 $exitItem   = $menu.Items.Add("Exit")
 $notifyIcon.ContextMenuStrip = $menu
 
+function Get-StateIcon([string]$mode) {
+    switch ($mode) {
+        "Tracking" { return [System.Drawing.SystemIcons]::Information }
+        "Paused"   { return [System.Drawing.SystemIcons]::Warning }
+        default    { return [System.Drawing.SystemIcons]::Question }
+    }
+}
+
+# --- Runtime-only, not persisted: tracks the mode currently shown so the
+# icon is only reassigned when it actually changes.
+$script:currentTrayMode = $null
+
+function Update-TrayIcon([string]$mode) {
+    if ($mode -eq $script:currentTrayMode) { return }
+    $notifyIcon.Icon = Get-StateIcon $mode
+    $script:currentTrayMode = $mode
+}
+
 function Update-TrayText {
     $stats      = Get-DailyStats
     $todayHours = [math]::Round($script:state.todaySeconds / 3600, 2)
@@ -191,6 +215,7 @@ function Update-TrayText {
     if ($text.Length -gt 63) { $text = $text.Substring(0, 60) + "..." }
     $notifyIcon.Text = $text
     $pauseItem.Text = if ($script:state.manualPause) { "Resume" } else { "Pause" }
+    Update-TrayIcon (Get-TrackingMode)
 }
 
 function Write-StatusFile {
@@ -201,7 +226,10 @@ function Write-StatusFile {
     $leftStr        = Format-SignedHours $stats.TimeLeftTodaySeconds
     $devStr         = Format-SignedHours $stats.WeeklyDeviationSeconds
     $carryStr       = Format-SignedHours $stats.CarryOverSeconds
-    $mode = if ($script:isLocked) { "Locked" } elseif ($script:state.manualPause) { "Paused (manual)" } else { "Tracking" }
+    $mode = switch (Get-TrackingMode) {
+        "Paused" { "Paused (manual)" }
+        default  { $_ }
+    }
     $breakNote = if ($stats.BreakIncluded) { " (incl. 1h break)" } else { " (break already assumed taken)" }
     @"
 wrktmr status - $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
