@@ -244,6 +244,7 @@ function Write-StatusFile {
         default  { $_ }
     }
     $breakNote = if ($stats.BreakIncluded) { " (incl. 1h break)" } else { " (break already assumed taken)" }
+    $weeklyOverview = Get-WeeklyOverview
     @"
 wrktmr status - $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Status: $mode
@@ -253,7 +254,41 @@ Time left today: $leftStr
 Projected end time today$($breakNote): $($stats.ProjectedEnd.ToString("HH:mm"))
 Deviation from plan (this week): $devStr
 This week (since $($script:state.weekStart)): $weekStr
+
+Weekly overview (Mo-Fri):
+$weeklyOverview
 "@ | Out-File -FilePath $statusFile -Encoding utf8
+}
+
+function Get-WeeklyOverview {
+    # Mo-Fri breakdown of the current week so far: completed days come from
+    # history.csv (written on day rollover), today comes from live state.
+    $weekStartDate = [datetime]::ParseExact($script:state.weekStart, "yyyy-MM-dd", $null)
+    $todayDate     = [datetime]::ParseExact($script:state.today, "yyyy-MM-dd", $null)
+
+    $historyByDate = @{}
+    if (Test-Path $historyCsv) {
+        Import-Csv $historyCsv | ForEach-Object { $historyByDate[$_.Date] = [double]$_.Hours }
+    }
+
+    $lines = @()
+    for ($i = 0; $i -lt 5; $i++) {
+        $d = $weekStartDate.AddDays($i)
+        $dateStr = $d.ToString("yyyy-MM-dd")
+        $label   = "{0} ({1})" -f $d.ToString("ddd"), $dateStr
+
+        if ($d -eq $todayDate) {
+            $hoursStr = Format-Hours $script:state.todaySeconds
+        } elseif ($historyByDate.ContainsKey($dateStr)) {
+            $hoursStr = Format-Hours ($historyByDate[$dateStr] * 3600)
+        } elseif ($d -lt $todayDate) {
+            $hoursStr = "0h"
+        } else {
+            $hoursStr = "-"
+        }
+        $lines += "  {0,-18}{1}" -f $label, $hoursStr
+    }
+    return $lines -join "`n"
 }
 
 function Show-Balloon($title, $text, $icon = [System.Windows.Forms.ToolTipIcon]::Info) {

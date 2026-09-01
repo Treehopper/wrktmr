@@ -39,7 +39,8 @@ shows how far off that plan you are:
 
 The tray icon's tooltip always shows today's hours, time left, and
 deviation. Right-click > "Show status" opens a live status file with the
-full detail, including the projected end time.
+full detail, including the projected end time and a Monday-Friday
+breakdown of hours logged so far this week.
 
 ## Notifications
 
