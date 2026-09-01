@@ -179,10 +179,9 @@ $notifyIcon.ContextMenuStrip = $menu
 function Update-TrayText {
     $stats      = Get-DailyStats
     $todayHours = [math]::Round($script:state.todaySeconds / 3600, 2)
-    $leftStr    = Format-SignedHours $stats.TimeLeftTodaySeconds
     $devStr     = Format-SignedHours $stats.WeeklyDeviationSeconds
-    $mode = if ($script:isLocked) { "locked" } elseif ($script:state.manualPause) { "paused" } else { "tracking" }
-    $text = "wrktmr: {0}h today, {1} left, dev {2} [{3}]" -f $todayHours, $leftStr, $devStr, $mode
+    $endStr     = $stats.ProjectedEnd.ToString("HH:mm")
+    $text = "{0}h today, dev {1}, end {2}" -f $todayHours, $devStr, $endStr
     if ($text.Length -gt 63) { $text = $text.Substring(0, 60) + "..." }
     $notifyIcon.Text = $text
     $pauseItem.Text = if ($script:state.manualPause) { "Resume" } else { "Pause" }
