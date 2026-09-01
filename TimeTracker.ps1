@@ -14,10 +14,6 @@ wrktmr - a lightweight system-tray time tracker for staying within a
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
 Add-Type -AssemblyName Microsoft.VisualBasic
-Add-Type -Namespace WrkTmr -Name NativeMethods -MemberDefinition @"
-[DllImport("user32.dll")]
-public static extern bool DestroyIcon(IntPtr handle);
-"@
 
 # --- Single instance guard ---
 $mutexName = "Local\WrkTmr-SingleInstance"
@@ -192,74 +188,21 @@ $menu.Items.Add("-") | Out-Null
 $exitItem   = $menu.Items.Add("Exit")
 $notifyIcon.ContextMenuStrip = $menu
 
-function New-StateIcon([string]$mode) {
-    # Renders a small state icon at runtime so no external asset files are
-    # needed: a colored circle with a glyph (play/pause/lock) baked in.
-    $bgColor = switch ($mode) {
-        "Tracking" { [System.Drawing.Color]::FromArgb(39, 174, 96) }   # green
-        "Paused"   { [System.Drawing.Color]::FromArgb(230, 126, 34) }  # orange
-        default    { [System.Drawing.Color]::FromArgb(127, 140, 141) } # grey (locked)
-    }
-
-    $bmp = New-Object System.Drawing.Bitmap(16, 16)
-    $g = [System.Drawing.Graphics]::FromImage($bmp)
-    try {
-        $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-        $g.Clear([System.Drawing.Color]::Transparent)
-
-        $bgBrush = New-Object System.Drawing.SolidBrush($bgColor)
-        try { $g.FillEllipse($bgBrush, 0, 0, 16, 16) } finally { $bgBrush.Dispose() }
-
-        $glyphBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-        try {
-            switch ($mode) {
-                "Tracking" {
-                    $points = @(
-                        (New-Object System.Drawing.Point(5, 4)),
-                        (New-Object System.Drawing.Point(5, 12)),
-                        (New-Object System.Drawing.Point(12, 8))
-                    )
-                    $g.FillPolygon($glyphBrush, $points)
-                }
-                "Paused" {
-                    $g.FillRectangle($glyphBrush, 5, 4, 2, 8)
-                    $g.FillRectangle($glyphBrush, 9, 4, 2, 8)
-                }
-                default {
-                    # Locked: simple padlock shape.
-                    $pen = New-Object System.Drawing.Pen($glyphBrush, 1.5)
-                    try { $g.DrawArc($pen, 6, 3, 4, 5, 180, 180) } finally { $pen.Dispose() }
-                    $g.FillRectangle($glyphBrush, 5, 7, 6, 5)
-                }
-            }
-        } finally { $glyphBrush.Dispose() }
-    } finally { $g.Dispose() }
-
-    $hIcon = $bmp.GetHicon()
-    $bmp.Dispose()
-    try {
-        $srcIcon = [System.Drawing.Icon]::FromHandle($hIcon)
-        try {
-            return $srcIcon.Clone()
-        } finally {
-            $srcIcon.Dispose()
-        }
-    } finally {
-        [WrkTmr.NativeMethods]::DestroyIcon($hIcon) | Out-Null
+function Get-StateIcon([string]$mode) {
+    switch ($mode) {
+        "Tracking" { return [System.Drawing.SystemIcons]::Information }
+        "Paused"   { return [System.Drawing.SystemIcons]::Warning }
+        default    { return [System.Drawing.SystemIcons]::Question }
     }
 }
 
-# --- Runtime-only, not persisted: tracks the icon currently shown so it's
-# only regenerated (and the old GDI handle released) when the mode changes.
+# --- Runtime-only, not persisted: tracks the mode currently shown so the
+# icon is only reassigned when it actually changes.
 $script:currentTrayMode = $null
-$script:currentTrayIcon = $null
 
 function Update-TrayIcon([string]$mode) {
     if ($mode -eq $script:currentTrayMode) { return }
-    $newIcon = New-StateIcon $mode
-    $notifyIcon.Icon = $newIcon
-    if ($script:currentTrayIcon) { $script:currentTrayIcon.Dispose() }
-    $script:currentTrayIcon = $newIcon
+    $notifyIcon.Icon = Get-StateIcon $mode
     $script:currentTrayMode = $mode
 }
 
