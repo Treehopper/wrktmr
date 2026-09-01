@@ -33,7 +33,9 @@ shows how far off that plan you are:
 - **Deviation** - your running total ahead of or behind plan for the week
   so far.
 - **Projected end time** - today's likely finish time, based on the time
-  still left to log plus a 1-hour break.
+  still left to log plus a 1-hour break. Once it's past the break cutoff
+  (1pm by default), the break is assumed to have already happened and is
+  no longer added.
 
 The tray icon's tooltip always shows today's hours, time left, and
 deviation. Right-click > "Show status" opens a live status file with the
@@ -76,4 +78,5 @@ To remove the auto-start shortcut later, run `Uninstall-Startup.ps1`.
 Edit `$WeeklyLimitHours = 39` near the top of `TimeTracker.ps1`. The daily
 plan is this limit split across `$WorkDaysPerWeek` (default 5); the
 assumed break used for the projected end time is `$BreakSeconds` (default
-1 hour) - both are configurable in the same place.
+1 hour), added only until `$BreakCutoffHour` (default 13, i.e. 1pm) - all
+are configurable in the same place.
