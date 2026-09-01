@@ -42,6 +42,7 @@ $WorkDaysPerWeek    = 5
 $WeeklyLimitSeconds = $WeeklyLimitHours * 3600
 $DailyPlanSeconds   = $WeeklyLimitSeconds / $WorkDaysPerWeek
 $BreakSeconds       = 3600
+$BreakCutoffHour    = 13
 $TickIntervalMs     = 15000
 
 function Get-WeekStart([datetime]$date) {
@@ -89,13 +90,18 @@ function Get-DailyStats {
 
     $weeklyDeviationSeconds = $script:state.weeklySeconds - ($workdaysThroughToday * $DailyPlanSeconds)
 
+    # Past the cutoff hour, the break is assumed to have already happened,
+    # so it's no longer added on top of the projected end time.
+    $breakSecondsRemaining = if ($now.Hour -ge $BreakCutoffHour) { 0 } else { $BreakSeconds }
+
     return [ordered]@{
         TodayPlanSeconds       = $todayPlanSeconds
         TimeLeftTodaySeconds   = $timeLeftTodaySeconds
         CarryOverSeconds       = $carryOverSeconds
         WeeklyDeviationSeconds = $weeklyDeviationSeconds
-        ProjectedEnd           = $now.AddSeconds($timeLeftTodaySeconds + $BreakSeconds)
+        ProjectedEnd           = $now.AddSeconds($timeLeftTodaySeconds + $breakSecondsRemaining)
         TodayIsWorkday         = $todayIsWorkday
+        BreakIncluded          = $breakSecondsRemaining -gt 0
     }
 }
 
@@ -196,13 +202,14 @@ function Write-StatusFile {
     $devStr         = Format-SignedHours $stats.WeeklyDeviationSeconds
     $carryStr       = Format-SignedHours $stats.CarryOverSeconds
     $mode = if ($script:isLocked) { "Locked" } elseif ($script:state.manualPause) { "Paused (manual)" } else { "Tracking" }
+    $breakNote = if ($stats.BreakIncluded) { " (incl. 1h break)" } else { " (break already assumed taken)" }
     @"
 wrktmr status - $(Get-Date -Format "yyyy-MM-dd HH:mm:ss")
 Status: $mode
 Today: $todayHours h (plan: $todayPlanHours h)
 Carry-over from previous days: $carryStr
 Time left today: $leftStr
-Projected end time today (incl. 1h break): $($stats.ProjectedEnd.ToString("HH:mm"))
+Projected end time today$($breakNote): $($stats.ProjectedEnd.ToString("HH:mm"))
 Deviation from plan (this week): $devStr
 This week (since $($script:state.weekStart)): $weekHours h
 "@ | Out-File -FilePath $statusFile -Encoding utf8
