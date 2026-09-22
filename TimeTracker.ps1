@@ -184,8 +184,48 @@ function Get-TrackingMode {
     return "Tracking"
 }
 
+function Get-SessionStartTime {
+    # Approximate when the current login session began, so a slow script
+    # startup (loading assemblies, JIT, etc.) doesn't lose the time between
+    # actual logon and the tray icon becoming ready. explorer.exe restarts
+    # on every logon and doesn't require admin rights to query, so its start
+    # time is a good proxy for logon time. Fall back to OS boot time, and
+    # finally to "now" (no backfill) if neither is available.
+    try {
+        $sessionId = (Get-Process -Id $PID).SessionId
+        $explorer = Get-Process -Name explorer -ErrorAction Stop |
+            Where-Object { $_.SessionId -eq $sessionId } |
+            Sort-Object StartTime |
+            Select-Object -First 1
+        if ($explorer) { return $explorer.StartTime }
+    } catch { }
+    try {
+        return (Get-CimInstance -ClassName Win32_OperatingSystem).LastBootUpTime
+    } catch { }
+    return Get-Date
+}
+
+function Backfill-SessionTime {
+    # Only backfill when today has no tracked time yet - i.e. this is the
+    # first tracking start of the day, not a mid-day restart that already
+    # has progress restored from disk.
+    if ($script:state.todaySeconds -gt 0) { return }
+    if (-not (Test-IsTracking)) { return }
+
+    $todayMidnight = (Get-Date).Date
+    $sessionStart  = Get-SessionStartTime
+    if ($sessionStart -lt $todayMidnight) { $sessionStart = $todayMidnight }
+
+    $elapsed = (New-TimeSpan -Start $sessionStart -End (Get-Date)).TotalSeconds
+    if ($elapsed -gt 0) {
+        $script:state.todaySeconds  += $elapsed
+        $script:state.weeklySeconds += $elapsed
+    }
+}
+
 Load-State
 Roll-DayAndWeek
+Backfill-SessionTime
 
 # --- Tray icon ---
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
