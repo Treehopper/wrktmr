@@ -3,6 +3,7 @@ wrktmr - a lightweight system-tray time tracker for staying within a
 39h/week work limit. Runs as the logged-in user, no admin rights required.
 
 - Auto-pauses when the workstation is locked, auto-resumes on unlock.
+- On unlock, asks whether the time away was work or break.
 - Manual Pause/Resume from the tray menu (e.g. for lunch) independent of lock state.
 - Persists state to disk every tick so a restart (e.g. via the Startup
   folder at logon) picks up where the week left off.
@@ -173,6 +174,10 @@ function Roll-DayAndWeek {
 
 # --- Runtime-only flag, not persisted (set from the SystemEvents thread) ---
 $script:isLocked = $false
+$script:lockStart = $null
+# Away period (hashtable with Start/End) waiting for the user to classify it.
+$script:pendingAway = $null
+$MinAwaySeconds = 60
 
 function Test-IsTracking {
     return (-not $script:state.manualPause) -and (-not $script:isLocked)
@@ -393,8 +398,18 @@ $exitItem.add_Click({
 $sessionHandler = [Microsoft.Win32.SessionSwitchEventHandler]{
     param($sender, $e)
     switch ($e.Reason) {
-        ([Microsoft.Win32.SessionSwitchReason]::SessionLock)   { $script:isLocked = $true }
-        ([Microsoft.Win32.SessionSwitchReason]::SessionUnlock) { $script:isLocked = $false }
+        ([Microsoft.Win32.SessionSwitchReason]::SessionLock) {
+            $script:isLocked = $true
+            # Skip when manually paused: that time is already excluded on purpose.
+            $script:lockStart = if ($script:state.manualPause) { $null } else { Get-Date }
+        }
+        ([Microsoft.Win32.SessionSwitchReason]::SessionUnlock) {
+            $script:isLocked = $false
+            if ($null -ne $script:lockStart) {
+                $script:pendingAway = @{ Start = $script:lockStart; End = Get-Date }
+                $script:lockStart = $null
+            }
+        }
         ([Microsoft.Win32.SessionSwitchReason]::SessionLogoff) { Save-State }
         default { }
     }
@@ -407,12 +422,43 @@ $endingHandler = [Microsoft.Win32.SessionEndingEventHandler]{
 }
 [Microsoft.Win32.SystemEvents]::add_SessionEnding($endingHandler)
 
+function Resolve-PendingAway {
+    # Asks whether the time spent locked was work or a break. Work time is
+    # added to today's total; break time stays untracked.
+    $away = $script:pendingAway
+    if ($null -eq $away) { return }
+    $script:pendingAway = $null
+
+    $start = $away.Start
+    $todayMidnight = (Get-Date).Date
+    if ($start -lt $todayMidnight) { $start = $todayMidnight }
+    $seconds = (New-TimeSpan -Start $start -End $away.End).TotalSeconds
+    if ($seconds -lt $MinAwaySeconds) { return }
+
+    $answer = [System.Windows.Forms.MessageBox]::Show(
+        ("You were away from {0} to {1} ({2}).`n`nWas this work time?`n`nYes = work (add to tracked time)`nNo = break (don't count)" -f
+            $start.ToString("HH:mm"), $away.End.ToString("HH:mm"), (Format-Hours $seconds)),
+        "wrktmr - Work or break?",
+        [System.Windows.Forms.MessageBoxButtons]::YesNo,
+        [System.Windows.Forms.MessageBoxIcon]::Question)
+
+    if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+        $script:state.todaySeconds  += $seconds
+        $script:state.weeklySeconds += $seconds
+        Update-TrayText
+        Write-StatusFile
+        Save-State
+    }
+}
+
 # --- Main tick (runs on the UI thread) ---
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = $TickIntervalMs
 $timer.add_Tick({
     try {
         Roll-DayAndWeek
+
+        if ($null -ne $script:pendingAway) { Resolve-PendingAway }
 
         if (Test-IsTracking) {
             $elapsed = $TickIntervalMs / 1000
