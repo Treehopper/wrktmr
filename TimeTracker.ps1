@@ -4,6 +4,8 @@ wrktmr - a lightweight system-tray time tracker for staying within a
 
 - Auto-pauses when the workstation is locked, auto-resumes on unlock.
 - Manual Pause/Resume from the tray menu (e.g. for lunch) independent of lock state.
+- After an unlock or a login following a restart, asks whether the time
+  away was work or break; work is added to the tracked time.
 - Persists state to disk every tick so a restart (e.g. via the Startup
   folder at logon) picks up where the week left off.
 - Notifies at 90% and 100% of the weekly limit, then once per additional
@@ -125,6 +127,8 @@ $script:state = [ordered]@{
     today              = (Get-Date).ToString("yyyy-MM-dd")
     todaySeconds       = 0
     manualPause        = $false
+    lastSeen           = ""
+    lockStart          = ""
     notified90         = $false
     notified100        = $false
     notifiedOvertimeHr = 0
@@ -145,6 +149,7 @@ function Load-State {
 
 function Save-State {
     try {
+        $script:state.lastSeen = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
         ($script:state | ConvertTo-Json) | Out-File -FilePath $stateFile -Encoding utf8
     } catch {
         "$(Get-Date -Format o) Save-State failed: $_" | Out-File -FilePath $errorLog -Append -Encoding utf8
@@ -205,7 +210,26 @@ function Get-SessionStartTime {
     return Get-Date
 }
 
-function Backfill-SessionTime {
+function ConvertTo-DateOrNull($value) {
+    if ([string]::IsNullOrEmpty([string]$value)) { return $null }
+    try { return [datetime]$value } catch { return $null }
+}
+
+# --- Runtime-only: a time away waiting to be classified as work or break.
+# Set from the SystemEvents thread (unlock) or at startup; the UI-thread tick
+# shows the prompt.
+$script:pendingAway = $null
+
+function Set-PendingAway($start, [datetime]$end) {
+    # Clip to today and ignore trivial gaps.
+    if ($null -eq $start) { return }
+    $todayMidnight = (Get-Date).Date
+    if ($start -lt $todayMidnight) { $start = $todayMidnight }
+    if (($end - $start).TotalSeconds -lt 60) { return }
+    $script:pendingAway = @{ Start = $start; End = $end }
+}
+
+function Backfill-SessionTime([datetime]$sessionStart) {
     # Only backfill when today has no tracked time yet - i.e. this is the
     # first tracking start of the day, not a mid-day restart that already
     # has progress restored from disk.
@@ -213,7 +237,6 @@ function Backfill-SessionTime {
     if (-not (Test-IsTracking)) { return }
 
     $todayMidnight = (Get-Date).Date
-    $sessionStart  = Get-SessionStartTime
     if ($sessionStart -lt $todayMidnight) { $sessionStart = $todayMidnight }
 
     $elapsed = (New-TimeSpan -Start $sessionStart -End (Get-Date)).TotalSeconds
@@ -224,8 +247,18 @@ function Backfill-SessionTime {
 }
 
 Load-State
+$startupAwayStart = if ($script:state.manualPause) { $null }
+    elseif ($script:state.lockStart) { ConvertTo-DateOrNull $script:state.lockStart }
+    else { ConvertTo-DateOrNull $script:state.lastSeen }
+$script:state.lockStart = ""
 Roll-DayAndWeek
-Backfill-SessionTime
+$sessionStart = Get-SessionStartTime
+Backfill-SessionTime $sessionStart
+# Time between the last run (or the lock it ended in) and this logon. Only
+# asked about when it started today, so overnight gaps aren't prompted.
+if ($startupAwayStart -and $startupAwayStart.Date -eq (Get-Date).Date) {
+    Set-PendingAway $startupAwayStart $sessionStart
+}
 
 # --- Tray icon ---
 $notifyIcon = New-Object System.Windows.Forms.NotifyIcon
@@ -393,8 +426,20 @@ $exitItem.add_Click({
 $sessionHandler = [Microsoft.Win32.SessionSwitchEventHandler]{
     param($sender, $e)
     switch ($e.Reason) {
-        ([Microsoft.Win32.SessionSwitchReason]::SessionLock)   { $script:isLocked = $true }
-        ([Microsoft.Win32.SessionSwitchReason]::SessionUnlock) { $script:isLocked = $false }
+        ([Microsoft.Win32.SessionSwitchReason]::SessionLock) {
+            $script:isLocked = $true
+            # Manually paused time is excluded on purpose, so don't ask about it.
+            if (-not $script:state.manualPause) {
+                $script:state.lockStart = (Get-Date).ToString("yyyy-MM-ddTHH:mm:ss")
+            }
+        }
+        ([Microsoft.Win32.SessionSwitchReason]::SessionUnlock) {
+            $script:isLocked = $false
+            if ($script:state.lockStart) {
+                Set-PendingAway (ConvertTo-DateOrNull $script:state.lockStart) (Get-Date)
+                $script:state.lockStart = ""
+            }
+        }
         ([Microsoft.Win32.SessionSwitchReason]::SessionLogoff) { Save-State }
         default { }
     }
@@ -413,6 +458,23 @@ $timer.Interval = $TickIntervalMs
 $timer.add_Tick({
     try {
         Roll-DayAndWeek
+
+        if ($script:pendingAway) {
+            $away = $script:pendingAway
+            $script:pendingAway = $null
+            $awaySeconds = ($away.End - $away.Start).TotalSeconds
+            $answer = [System.Windows.Forms.MessageBox]::Show(
+                ("You were away from {0} to {1} ({2}).`n`nWas this work time?" -f
+                    $away.Start.ToString("HH:mm"), $away.End.ToString("HH:mm"),
+                    (Format-Hours $awaySeconds)),
+                "wrktmr - work or break?",
+                [System.Windows.Forms.MessageBoxButtons]::YesNo,
+                [System.Windows.Forms.MessageBoxIcon]::Question)
+            if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
+                $script:state.todaySeconds  += $awaySeconds
+                $script:state.weeklySeconds += $awaySeconds
+            }
+        }
 
         if (Test-IsTracking) {
             $elapsed = $TickIntervalMs / 1000
