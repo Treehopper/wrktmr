@@ -452,6 +452,44 @@ $endingHandler = [Microsoft.Win32.SessionEndingEventHandler]{
 }
 [Microsoft.Win32.SystemEvents]::add_SessionEnding($endingHandler)
 
+# Custom dialog with explicit Yes/No buttons (a plain MessageBox can render
+# without a usable Yes button when shown from the tray context).
+function Show-WorkOrBreakDialog([string]$text) {
+    $form = New-Object System.Windows.Forms.Form
+    $form.Text = "wrktmr - work or break?"
+    $form.StartPosition = "CenterScreen"
+    $form.FormBorderStyle = "FixedDialog"
+    $form.MaximizeBox = $false
+    $form.MinimizeBox = $false
+    $form.ShowInTaskbar = $true
+    $form.TopMost = $true
+    $form.ClientSize = New-Object System.Drawing.Size(360, 140)
+
+    $label = New-Object System.Windows.Forms.Label
+    $label.Text = $text
+    $label.Location = New-Object System.Drawing.Point(15, 15)
+    $label.Size = New-Object System.Drawing.Size(330, 75)
+    $form.Controls.Add($label)
+
+    $yes = New-Object System.Windows.Forms.Button
+    $yes.Text = "Yes (work)"
+    $yes.Size = New-Object System.Drawing.Size(110, 28)
+    $yes.Location = New-Object System.Drawing.Point(75, 100)
+    $yes.DialogResult = [System.Windows.Forms.DialogResult]::Yes
+    $form.Controls.Add($yes)
+
+    $no = New-Object System.Windows.Forms.Button
+    $no.Text = "No (break)"
+    $no.Size = New-Object System.Drawing.Size(110, 28)
+    $no.Location = New-Object System.Drawing.Point(195, 100)
+    $no.DialogResult = [System.Windows.Forms.DialogResult]::No
+    $form.Controls.Add($no)
+
+    $form.AcceptButton = $yes
+    $form.CancelButton = $no
+    try { return $form.ShowDialog() } finally { $form.Dispose() }
+}
+
 # --- Main tick (runs on the UI thread) ---
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = $TickIntervalMs
@@ -463,13 +501,10 @@ $timer.add_Tick({
             $away = $script:pendingAway
             $script:pendingAway = $null
             $awaySeconds = ($away.End - $away.Start).TotalSeconds
-            $answer = [System.Windows.Forms.MessageBox]::Show(
+            $answer = Show-WorkOrBreakDialog `
                 ("You were away from {0} to {1} ({2}).`n`nWas this work time?" -f
                     $away.Start.ToString("HH:mm"), $away.End.ToString("HH:mm"),
-                    (Format-Hours $awaySeconds)),
-                "wrktmr - work or break?",
-                [System.Windows.Forms.MessageBoxButtons]::YesNo,
-                [System.Windows.Forms.MessageBoxIcon]::Question)
+                    (Format-Hours $awaySeconds))
             if ($answer -eq [System.Windows.Forms.DialogResult]::Yes) {
                 $script:state.todaySeconds  += $awaySeconds
                 $script:state.weeklySeconds += $awaySeconds
